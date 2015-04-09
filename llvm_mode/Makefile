@@ -24,9 +24,6 @@ VERSION      = $(shell grep ^VERSION ../Makefile | cut -d= -f2 | sed 's/ //')
 
 LLVM_CONFIG ?= llvm-config
 
-CC           = `$(LLVM_CONFIG) --bindir`/clang
-CXX          = `$(LLVM_CONFIG) --bindir`/clang++
-
 CFLAGS      ?= -O3 -funroll-loops
 CFLAGS      += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign \
                -DAFL_PATH=\"$(HELPER_PATH)\" -DBIN_PATH=\"$(BIN_PATH)\" \
@@ -39,13 +36,22 @@ CXXFLAGS    += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign \
 CLANG_CFL    = `$(LLVM_CONFIG) --cxxflags` -fno-rtti $(CXXFLAGS)
 CLANG_LFL    = `$(LLVM_CONFIG) --ldflags` $(LDFLAGS)
 
+# We were using llvm-config --bindir to get the location of clang, but
+# this seems to be busted on some distros, so using the one in $PATH is
+# probably better.
+
+CC           = clang
+CXX          = clang++
+
 PROGS        = ../afl-clang-fast ../afl-llvm-pass.so ../afl-llvm-rt.o
 
 all: test_deps $(PROGS) test_build all_done
 
 test_deps:
 	@echo "[*] Checking for working 'llvm-config'..."
-	@which $(LLVM_CONFIG) &>/dev/null || ( echo "[-] Oops, can't find 'llvm-config'. Install clang or set \$$LLVM_CONFIG beforehand."; exit 1 )
+	@which $(LLVM_CONFIG) &>/dev/null || ( echo "[-] Oops, can't find 'llvm-config'. Install clang or set \$$LLVM_CONFIG beforehand."; echo "    (Sometimes, the binary will be named llvm-config-3.5 or something like that.)"; exit 1 )
+	@echo "[*] Checking for working '$(CC)'..."
+	@which $(CC) &>/dev/null || ( echo "[-] Oops, can't find '$(CC)'. Make sure that it's in your \$$PATH."; exit 1 )
 	@echo "[*] Checking for '../afl-showmap'..."
 	@test -f ../afl-showmap || ( echo "[-] Oops, can't find '../afl-showmap'. Be sure to compile AFL first."; exit 1 )
 	@echo "[+] All set and ready to build."
@@ -62,7 +68,7 @@ test_deps:
 
 test_build: $(PROGS)
 	@echo "[*] Testing the CC wrapper and instrumentation output..."
-	unset AFL_USE_ASAN AFL_USE_MSAN; AFL_QUIET=1 AFL_INST_RATIO=100 AFL_PATH=. ../afl-clang-fast $(CFLAGS) ../test-instr.c -o test-instr $(LDFLAGS)
+	unset AFL_USE_ASAN AFL_USE_MSAN; AFL_QUIET=1 AFL_INST_RATIO=100 AFL_PATH=. AFL_CC=$(CC) ../afl-clang-fast $(CFLAGS) ../test-instr.c -o test-instr $(LDFLAGS)
 	echo 0 | ../afl-showmap -m none -q -o .test-instr0 ./test-instr
 	echo 1 | ../afl-showmap -m none -q -o .test-instr1 ./test-instr
 	@rm -f test-instr
