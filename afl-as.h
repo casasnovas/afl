@@ -508,7 +508,7 @@ static const u8* main_payload_64 =
   "  push %rax\n"
   "  push %rax\n"
   "  mov $42, %edi   /* fd = 42        */\n"
-  "  mov $43, %esi   /* request = 43   */\n"
+  "  mov $42, %esi   /* request = ASSOC*/\n"
   CALL_L64("ioctl")
   "  cmpq $-1, %rax\n"
   "  je   __afl_setup_abort\n"
