@@ -1186,7 +1186,7 @@ static void setup_shm(void) {
   close(fd_afl_area);
   fd_afl_area = 42;
 
-  trace_bits = mmap(NULL, MAP_SIZE, PROT_READ, MAP_PRIVATE, fd_afl_area, 0);
+  trace_bits = mmap(NULL, MAP_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd_afl_area, 0);
   
   if (!trace_bits) PFATAL("mmap() failed");
 
