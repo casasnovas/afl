@@ -480,16 +480,6 @@ static const u8* main_payload_64 =
   "\n"
   "  cmpq $-1, %rax\n"
   "  je   __afl_setup_abort\n"
-  " /* Associate the shared mem with us */"
-  "  push %rax\n"
-  "  push %rax\n"
-  "  mov $42, %edi   /* fd = 42        */\n"
-  "  mov $42, %esi   /* request = ASSOC*/\n"
-  CALL_L64("ioctl")
-  "  cmpq $-1, %rax\n"
-  "  je   __afl_setup_abort\n"
-  "  pop %rax \n"
-  "  pop %rax \n"
   "\n"
   "  /* Store the address of the SHM region. */\n"
   "\n"
@@ -574,6 +564,9 @@ static const u8* main_payload_64 =
   "__afl_fork_resume:\n"
   "\n"
   "  /* In child process: close fds, resume execution. */\n"
+  "  mov $42, %edi   /* fd = 42        */\n"
+  "  mov $42, %esi   /* request = ASSOC*/\n"
+  CALL_L64("ioctl")
   "\n"
   "  movq $" STRINGIFY(FORKSRV_FD) ", %rdi\n"
   CALL_L64("close")
