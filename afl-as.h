@@ -497,8 +497,8 @@ static const u8* main_payload_64 =
   "  xor %r9d, %r9d       /* offset = 0 */\n"
   "  xor %edi, %edi       /* addr = NULL */\n"
   "  mov $42,  %r8d       /* fd = 42*/ \n"
-  "  mov $0x2, %ecx       /* prot = PROT_READ | PROT_WRITE */ \n"
-  "  mov $0x1, %edx       /* flags = MAP_PRIVATE */\n"
+  "  mov $0x2, %ecx       /* flags = MAP_PRIVATE */\n"
+  "  mov $0x3, %edx       /* prot = PROT_READ | PROT_WRITE */ \n"
   "  mov $0x10000, %esi   /* size = MAP_SIZE */\n"
   CALL_L64("mmap")
   "\n"
