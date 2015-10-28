@@ -1179,14 +1179,14 @@ static void setup_shm(void) {
   memset(virgin_hang, 255, MAP_SIZE);
   memset(virgin_crash, 255, MAP_SIZE);
 
-  fd_afl_area = open("/dev/afl", O_RDONLY);
+  fd_afl_area = open("/dev/afl", O_RDWR);
   if (fd_afl_area < 0) PFATAL("open(/dev/afl) failed");
 
   if (dup2(fd_afl_area, 42) < 0) PFATAL("dup2(fd_afl_area, 42) failed");
   close(fd_afl_area);
   fd_afl_area = 42;
 
-  trace_bits = mmap(NULL, MAP_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd_afl_area, 0);
+  trace_bits = mmap(NULL, MAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd_afl_area, 0);
   
   if (!trace_bits) PFATAL("mmap() failed");
 
