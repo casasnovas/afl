@@ -483,6 +483,7 @@ static const u8* main_payload_64 =
   "\n"
   "  /* Store the address of the SHM region. */\n"
   "\n"
+  "  movq $42, %rax  \n"
   "  movq %rax, %rdx\n"
   "  movq %rax, __afl_area_ptr(%rip)\n"
   "\n"
