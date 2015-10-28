@@ -401,22 +401,6 @@ static const u8* main_payload_64 =
   "  testq %rdx, %rdx\n"
   "  je    __afl_setup\n"
   "\n"
-  "__afl_store:\n"
-  "\n"
-  "  /* Calculate and store hit for the code location specified in rcx. */\n"
-  "\n"
-#ifndef COVERAGE_ONLY
-  "  xorq __afl_prev_loc(%rip), %rcx\n"
-  "  xorq %rcx, __afl_prev_loc(%rip)\n"
-  "  shrq $1, __afl_prev_loc(%rip)\n"
-#endif /* ^!COVERAGE_ONLY */
-  "\n"
-#ifdef SKIP_COUNTS
-  "  orb  $1, (%rdx, %rcx, 1)\n"
-#else
-  "  incb (%rdx, %rcx, 1)\n"
-#endif /* ^SKIP_COUNTS */
-  "\n"
   "__afl_return:\n"
   "\n"
   "  addb $127, %al\n"
@@ -493,14 +477,6 @@ static const u8* main_payload_64 =
   "  subq  $16, %rsp\n"
   "  andq  $0xfffffffffffffff0, %rsp\n"
   "\n"
-  "\n"
-  "  xor %r9d, %r9d       /* offset = 0 */\n"
-  "  xor %edi, %edi       /* addr = NULL */\n"
-  "  mov $42,  %r8d       /* fd = 42*/ \n"
-  "  mov $0x2, %ecx       /* flags = MAP_PRIVATE */\n"
-  "  mov $0x3, %edx       /* prot = PROT_READ | PROT_WRITE */ \n"
-  "  mov $0x10000, %esi   /* size = MAP_SIZE */\n"
-  CALL_L64("mmap")
   "\n"
   "  cmpq $-1, %rax\n"
   "  je   __afl_setup_abort\n"
