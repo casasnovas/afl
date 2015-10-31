@@ -283,6 +283,7 @@
    use FORKSRV_FD and FORKSRV_FD + 1): */
 
 #define FORKSRV_FD          198
+#define DEVAFL_FD	    42
 
 /* Fork server init timeout multiplier: we'll wait the user-selected
    timeout plus this much for the fork server to spin up. */
