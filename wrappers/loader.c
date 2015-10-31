@@ -10,6 +10,8 @@ int main(int argc, char** argv)
   if (argc < 2)
     return -1;
 
+  afl_fork_server();
+
   chmod(argv[1], S_IRWXU);
   if ((child = fork()))
     return waitpid(child, NULL, 0x0) == child;
