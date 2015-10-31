@@ -59,6 +59,9 @@
 #  include <sys/sysctl.h>
 #endif /* __APPLE__ || __FreeBSD__ || __OpenBSD__ */
 
+# define AFL_CTL_ASSOC_AREA (42)
+# define AFL_CTL_DISASSOC_AREA (43)
+# define AFL_CTL_GET_MMAP_OFFSET (44)
 
 /* Lots of globals, but mostly for the status UI and other things where it
    really makes no sense to haul them around as function parameters. */
@@ -119,6 +122,7 @@ static u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
 
 /* static s32 shm_id;                    /\* ID of the SHM region             *\/ */
 static int fd_afl_area;
+static off_t mmap_offset;
 
 static volatile u8 stop_soon,         /* Ctrl-C pressed?                  */
                    clear_screen = 1,  /* Window resized?                  */
@@ -987,7 +991,6 @@ static inline void classify_counts(u64* mem) {
     /* Optimize for sparse bitmaps. */
 
     if (*mem) {
-
       u8* mem8 = (u8*)mem;
 
       mem8[0] = count_class_lookup[mem8[0]];
@@ -998,7 +1001,6 @@ static inline void classify_counts(u64* mem) {
       mem8[5] = count_class_lookup[mem8[5]];
       mem8[6] = count_class_lookup[mem8[6]];
       mem8[7] = count_class_lookup[mem8[7]];
-
     }
 
     mem++;
@@ -1182,13 +1184,15 @@ static void setup_shm(void) {
   fd_afl_area = open("/dev/afl", O_RDWR);
   if (fd_afl_area < 0) PFATAL("open(/dev/afl) failed");
 
-  if (dup2(fd_afl_area, 42) < 0) PFATAL("dup2(fd_afl_area, 42) failed");
+  if (dup2(fd_afl_area, DEVAFL_FD) < 0) PFATAL("dup2(fd_afl_area, 42) failed");
   close(fd_afl_area);
-  fd_afl_area = 42;
+  fd_afl_area = DEVAFL_FD;
 
-  trace_bits = mmap(NULL, MAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd_afl_area, 0);
+  mmap_offset = ioctl(fd_afl_area, AFL_CTL_GET_MMAP_OFFSET, 0);
+
+  trace_bits = mmap(NULL, MAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd_afl_area, mmap_offset);
   
-  if (!trace_bits) PFATAL("mmap() failed");
+  if (trace_bits == MAP_FAILED) PFATAL("mmap() failed");
 
 }
 
@@ -2065,182 +2069,172 @@ static void init_forkserver(char** argv) {
 }
 
 
-/* Execute target application, monitoring for timeouts. Return status
-   information. The called program will update trace_bits[]. */
-
-static u8 run_target(char** argv) {
-
-  static struct itimerval it;
-  static u32 prev_timed_out = 0;
-
-  int status = 0;
-  u32 tb4;
-
-  child_timed_out = 0;
-
-  /* After this memset, trace_bits[] are effectively volatile, so we
-     must prevent any earlier operations from venturing into that
-     territory. */
-# define AFL_CTL_DISASSOC_AREA (43)
+static void afl_disassoc_area(void)
+{
   ioctl(fd_afl_area, AFL_CTL_DISASSOC_AREA);
-  memset(trace_bits, 0, MAP_SIZE);
-  MEM_BARRIER();
+}
 
+static void afl_assoc_area(void)
+{
+  ioctl(fd_afl_area, AFL_CTL_ASSOC_AREA);
+}
+
+static void afl_manual_fork(char** argv)
+{
   /* If we're running in "dumb" mode, we can't rely on the fork server
      logic compiled into the target program, so we will just keep calling
      execve(). There is a bit of code duplication between here and 
      init_forkserver(), but c'est la vie. */
+  child_pid = fork();
 
-  if (dumb_mode == 1 || no_forkserver) {
+  if (child_pid < 0)
+    PFATAL("fork() failed");
 
-    child_pid = fork();
+  if (!child_pid) {
+    struct rlimit r;
 
-    if (child_pid < 0) PFATAL("fork() failed");
-
-    if (!child_pid) {
-
-      struct rlimit r;
-
-      if (mem_limit) {
-
-        r.rlim_max = r.rlim_cur = ((rlim_t)mem_limit) << 20;
-
+    if (mem_limit) {
+      r.rlim_max = r.rlim_cur = ((rlim_t)mem_limit) << 20;
 #ifdef RLIMIT_AS
-
-        setrlimit(RLIMIT_AS, &r); /* Ignore errors */
-
+      setrlimit(RLIMIT_AS, &r); /* Ignore errors */
 #else
-
-        setrlimit(RLIMIT_DATA, &r); /* Ignore errors */
-
-#endif /* ^RLIMIT_AS */
-
-      }
-
-      r.rlim_max = r.rlim_cur = 0;
-
-      setrlimit(RLIMIT_CORE, &r); /* Ignore errors */
-
-      /* Isolate the process and configure standard descriptors. If out_file is
-         specified, stdin is /dev/null; otherwise, out_fd is cloned instead. */
-
-      setsid();
-
-      dup2(dev_null_fd, 1);
-      dup2(dev_null_fd, 2);
-
-      if (out_file) {
-
-        dup2(dev_null_fd, 0);
-
-      } else {
-
-        dup2(out_fd, 0);
-        close(out_fd);
-
-      }
-
-      /* On Linux, would be faster to use O_CLOEXEC. Maybe TODO. */
-
-      close(dev_null_fd);
-      close(out_dir_fd);
-      close(dev_urandom_fd);
-      close(fileno(plot_file));
-
-      /* Set sane defaults for ASAN if nothing else specified. */
-
-      setenv("ASAN_OPTIONS", "abort_on_error=1:"
-                             "detect_leaks=0:"
-                             "allocator_may_return_null=1", 0);
-
-      setenv("MSAN_OPTIONS", "exit_code=" STRINGIFY(MSAN_ERROR) ":"
-                             "msan_track_origins=0", 0);
-
-      execv(target_path, argv);
-
-      /* Use a distinctive bitmap value to tell the parent about execv()
-         falling through. */
-
-      *(u32*)trace_bits = EXEC_FAIL_SIG;
-      exit(0);
-
+      setrlimit(RLIMIT_DATA, &r); /* Ignore errors */
+#endif
     }
 
-  } else {
+    r.rlim_max = r.rlim_cur = 0;
+    setrlimit(RLIMIT_CORE, &r); /* Ignore errors */
 
-    s32 res;
+    /* Isolate the process and configure standard descriptors. If out_file is
+       specified, stdin is /dev/null; otherwise, out_fd is cloned instead. */
 
-    /* In non-dumb mode, we have the fork server up and running, so simply
-       tell it to have at it, and then read back PID. */
+    setsid();
 
-    if ((res = write(fsrv_ctl_fd, &prev_timed_out, 4)) != 4) {
+    dup2(dev_null_fd, 1);
+    dup2(dev_null_fd, 2);
 
-      if (stop_soon) return 0;
-      RPFATAL(res, "Unable to request new process from fork server (OOM?)");
-
+    if (out_file) {
+      dup2(dev_null_fd, 0);
+    } else {
+      dup2(out_fd, 0);
+      close(out_fd);
     }
 
-    if ((res = read(fsrv_st_fd, &child_pid, 4)) != 4) {
+    /* On Linux, would be faster to use O_CLOEXEC. Maybe TODO. */
+    close(dev_null_fd);
+    close(out_dir_fd);
+    close(dev_urandom_fd);
+    close(fileno(plot_file));
 
-      if (stop_soon) return 0;
-      RPFATAL(res, "Unable to request new process from fork server (OOM?)");
+    /* Set sane defaults for ASAN if nothing else specified. */
+    setenv("ASAN_OPTIONS", "abort_on_error=1:"
+	   "detect_leaks=0:"
+	   "allocator_may_return_null=1", 0);
+    setenv("MSAN_OPTIONS", "exit_code=" STRINGIFY(MSAN_ERROR) ":"
+	   "msan_track_origins=0", 0);
 
-    }
+    afl_assoc_area();
 
-    if (child_pid <= 0) FATAL("Fork server is misbehaving (OOM?)");
+    execv(target_path, argv);
 
+    /* Use a distinctive bitmap value to tell the parent about execv()
+       falling through. */
+    *(u32*)trace_bits = EXEC_FAIL_SIG;
+    exit(0);
+  }
+}
+
+static int afl_forkserver_fork(void)
+{
+  s32 res;
+  u32 go = 0;
+
+  /* In non-dumb mode, we have the fork server up and running, so simply
+     tell it to have at it, and then read back PID. */
+
+  if ((res = write(fsrv_ctl_fd, &go, 4)) != 4) {
+    if (stop_soon)
+      return -1;
+    RPFATAL(res, "Unable to request new process from fork server (OOM?)");
   }
 
-  /* Configure timeout, as requested by user, then wait for child to terminate. */
+  if ((res = read(fsrv_st_fd, &child_pid, 4)) != 4) {
+    if (stop_soon)
+      return -1;
+    RPFATAL(res, "Unable to request new process from fork server (OOM?)");
+  }
 
+  if (child_pid <= 0)
+    FATAL("Fork server is misbehaving (OOM?)");
+  return 0;
+}
+
+int afl_fork(char** argv)
+{
+  if (dumb_mode == 1 || no_forkserver) {
+    afl_manual_fork(argv);
+    return 0;
+  } else {
+    return afl_forkserver_fork();
+  }
+}
+
+void afl_manual_waitchild(int* status)
+{
+   if (waitpid(child_pid, status, 0) <= 0)
+     PFATAL("waitpid() failed");
+}
+
+void afl_forkserver_waitchild(int* status)
+{
+  s32 res;
+
+  if ((res = read(fsrv_st_fd, status, 4)) != 4) {
+    if (stop_soon)
+      return;
+    RPFATAL(res, "Unable to communicate with fork server");
+  }
+}
+
+void afl_waitchild(int* status)
+{
+  if (dumb_mode == 1 || no_forkserver) {
+    afl_manual_waitchild(status);
+  } else {
+    afl_forkserver_waitchild(status);
+  }
+}
+
+static void afl_clear_child_timer(void)
+{
+  static struct itimerval it;
+
+  setitimer(ITIMER_REAL, &it, NULL);
+}
+
+/* Configure timeout, as requested by user, then wait for child to terminate. */
+static void afl_set_child_timer(void)
+{
+  static struct itimerval it;
   it.it_value.tv_sec = (exec_tmout / 1000);
   it.it_value.tv_usec = (exec_tmout % 1000) * 1000;
 
   setitimer(ITIMER_REAL, &it, NULL);
-
   /* The SIGALRM handler simply kills the child_pid and sets child_timed_out. */
+}
 
-  if (dumb_mode == 1 || no_forkserver) {
+static void afl_sync_fs(void)
+{
+  static int should_sync = 0;
 
-    if (waitpid(child_pid, &status, 0) <= 0) PFATAL("waitpid() failed");
-
-  } else {
-
-    s32 res;
-
-    if ((res = read(fsrv_st_fd, &status, 4)) != 4) {
-
-      if (stop_soon) return 0;
-      RPFATAL(res, "Unable to communicate with fork server");
-
-    }
-
+  if ((++should_sync % 4096) == 0) {
+    sync();
+    should_sync = 0;
   }
+}
 
-  child_pid = 0;
-  it.it_value.tv_sec = 0;
-  it.it_value.tv_usec = 0;
-
-  setitimer(ITIMER_REAL, &it, NULL);
-
-  total_execs++;
-
-  /* Any subsequent operations on trace_bits must not be moved by the
-     compiler below this point. Past this location, trace_bits[] behave
-     very normally and do not have to be treated as volatile. */
-
-  MEM_BARRIER();
-
-  tb4 = *(u32*)trace_bits;
-
-#ifdef __x86_64__
-  classify_counts((u64*)trace_bits);
-#else
-  classify_counts((u32*)trace_bits);
-#endif /* ^__x86_64__ */
-
-  prev_timed_out = child_timed_out;
-
+static u8 afl_report_child_status(int status, u32 tb4)
+{
   /* Report outcome to caller. */
 
   if (child_timed_out) return FAULT_HANG;
@@ -2262,7 +2256,43 @@ static u8 run_target(char** argv) {
     return FAULT_ERROR;
 
   return FAULT_NONE;
+}
 
+/* Execute target application, monitoring for timeouts. Return status
+   information. The called program will update trace_bits[]. */
+
+static u8 run_target(char** argv)
+{
+  int status = 0;
+
+  child_timed_out = 0;
+
+  afl_sync_fs();
+
+  if (afl_fork(argv) == -1)
+    return 0;
+
+  afl_set_child_timer();
+  afl_waitchild(&status);
+  afl_clear_child_timer();
+
+  child_pid = 0;
+  total_execs++;
+
+  afl_disassoc_area();
+
+  /* Any subsequent operations on trace_bits must not be moved by the
+     compiler below this point. Past this location, trace_bits[] behave
+     very normally and do not have to be treated as volatile. */
+  MEM_BARRIER();
+
+#ifdef __x86_64__
+  classify_counts((u64*)trace_bits);
+#else
+  classify_counts((u32*)trace_bits);
+#endif /* ^__x86_64__ */
+
+  return afl_report_child_status(status, *(u32*)trace_bits);
 }
 
 
