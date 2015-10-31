@@ -24,6 +24,9 @@ MISC_PATH   = $(PREFIX)/share/afl
 
 PROGS       = afl-gcc afl-as afl-fuzz afl-showmap afl-tmin afl-gotcpu
 
+LIBS           = libafl.so
+libafl.so-objs = forkserver.o
+
 CFLAGS     ?= -O3 -funroll-loops
 CFLAGS     += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign \
 	      -DAFL_PATH=\"$(HELPER_PATH)\" -DDOC_PATH=\"$(DOC_PATH)\" \
@@ -41,7 +44,7 @@ endif
 
 COMM_HDR    = alloc-inl.h config.h debug.h types.h
 
-all: test_x86 $(PROGS) test_build all_done
+all: test_x86 $(PROGS) $(LIBS) test_build all_done
 
 ifndef AFL_NOX86
 
@@ -57,6 +60,20 @@ test_x86:
 	@echo "[!] Note: skipping x86 compilation checks (AFL_NOX86 set)."
 
 endif
+
+define build_lib_obj
+$(1): $(1:.o=.c)
+	$(CC) $(CFLAGS) $$(cflags_$(1)) -c $$< -o $$@
+endef
+
+define build_lib
+$$(foreach obj,$($(1)-objs),$$(eval $$(call build_lib_obj,$$(obj))))
+$(1): $($(1)-objs)
+	$(CC) -shared -fpic $$^ -o $$@
+endef
+
+$(foreach lib,$(LIBS),$(eval $(call build_lib,$(lib))))
+
 
 afl-gcc: afl-gcc.c $(COMM_HDR) | test_x86
 	$(CC) $(CFLAGS) $@.c -o $@ $(LDFLAGS)
