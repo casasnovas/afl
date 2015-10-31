@@ -63,7 +63,7 @@ endif
 
 define build_lib_obj
 $(1): $(1:.o=.c)
-	$(CC) $(CFLAGS) $$(cflags_$(1)) -c $$< -o $$@
+	$(CC) $(CFLAGS) -fpic $$(cflags_$(1)) -c $$< -o $$@
 endef
 
 define build_lib
