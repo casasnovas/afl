@@ -1,7 +1,12 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-extern void afl_fork_server(void);
+#include "../config.h"
+#include "../forkserver.h"
+
+struct fork_server_config conf = {
+  .associate_after_fork = false,
+};
 
 int main(int argc, char** argv)
 {
@@ -10,14 +15,13 @@ int main(int argc, char** argv)
   if (argc < 2)
     return -1;
 
-  afl_fork_server();
+  afl_fork_server(&conf);
 
   chmod(argv[1], S_IRWXU);
   if ((child = fork()))
     return waitpid(child, NULL, 0x0) == child;
   else {
-    ioctl(42, 43, 0);
-    ioctl(42, 42, 0);
+    ioctl(DEVAFL_FD, 42, 0);
     return execl(argv[1], argv[1], NULL);
   }
 }
