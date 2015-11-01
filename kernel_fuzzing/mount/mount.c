@@ -8,6 +8,8 @@
 
 #include <linux/loop.h>
 
+#include "forkserver.h"
+
 static char mount_point[16];
 static void unmount_it(int mount_nr)
 {
@@ -57,6 +59,8 @@ int main(int argc, char** argv)
     fprintf(stderr, "Missing input file to mount.\n");
     return 42;
   }
+
+  afl_fork_server(NULL);
 
   nr_fuzzer = atoi(argv[1]);
 
