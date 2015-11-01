@@ -1,0 +1,17 @@
+#! /bin/bash
+
+input="$1"
+output="$2"
+wrapper="$3"
+
+for i in `seq 0 4`; do
+    export wrapper${i}="$(afl_instance=${i} eval echo $(echo ${wrapper}))"
+done
+
+tmux new-session -d        "zsh -c \"afl-fuzz -i ${input} -o ${output} -M fuzzer0 -- ${wrapper0}" \; \
+	split-window -h -d "afl-fuzz -i ${input} -o ${output} -S fuzzer1 -- ${wrapper1}" \; \
+	split-window -d    "afl-fuzz -i ${input} -o ${output} -S fuzzer2 -- ${wrapper2}" \; \
+	select-pane -R \; \
+	split-window -d    "afl-fuzz -i ${input} -o ${output} -S fuzzer3 -- ${wrapper3}" \; \
+	attach \;
+
