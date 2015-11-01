@@ -22,6 +22,7 @@ int main(int argc, char** argv)
     return waitpid(child, NULL, 0x0) == child;
   else {
     ioctl(DEVAFL_FD, 42, 0);
+    close(DEVAFL_FD);
     return execl(argv[1], argv[1], NULL);
   }
 }
