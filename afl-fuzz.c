@@ -1809,7 +1809,7 @@ static void init_forkserver(char** argv) {
   if (!forksrv_pid) {
 
     struct rlimit r;
-
+    munmap(trace_bits, MAP_SIZE);
     /* Umpf. On OpenBSD, the default fd limit for root users is set to
        soft 128. Let's try to fix that... */
 
