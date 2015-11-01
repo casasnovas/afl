@@ -7,10 +7,14 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
+#include "forkserver.h"
+
 #define die(Args, ...) do {						\
 		fprintf(stderr, "died at %s:%d:" Args, __FILE__, __LINE__, ## __VA_ARGS__); \
 		abort();						\
 	} while (0)
+
+static struct fork_server_config* local_config;
 
 static int afl_notify_parent(void)
 {
@@ -47,7 +51,8 @@ static void afl_tell_pid(void)
 
 static void afl_assoc_area(void)
 {
-	ioctl(DEVAFL_FD, 42, 0);
+  if (local_config && local_config->associate_after_fork)
+    ioctl(DEVAFL_FD, 42, 0);
 }
 
 static int afl_fork(void)
@@ -65,7 +70,7 @@ static int afl_fork(void)
 }
 		
 
-static void _afl_fork_server(void)
+static void _afl_fork_server()
 {
 	while (1) {
 		afl_wait_parent();
@@ -75,8 +80,9 @@ static void _afl_fork_server(void)
 	}
 }
 
-void afl_fork_server(void)
+void afl_fork_server(struct fork_server_config* config)
 {
+  local_config = config;
 	if (afl_notify_parent() < 0)
 		return;
 
