@@ -1,8 +1,8 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-#include "../config.h"
-#include "../forkserver.h"
+#include "config.h"
+#include "forkserver.h"
 
 struct fork_server_config conf = {
   .associate_after_fork = false,
