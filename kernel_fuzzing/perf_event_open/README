@@ -1,0 +1,32 @@
+perf_event_open
+===============
+
+Compiling
+---------
+
+    $ bash make.sh
+
+Running
+-------
+
+There are 3 binaries:
+
+ - init: used to generate the initial binary image
+ - run: used to execute a single binary image (verbose output)
+ - run_afl: same as 'run', except optimised to run under afl-fuzz
+
+Example:
+
+    $ mkdir input/
+    $ ./init input/test_image
+
+    $ strace ./run input/test_image
+    ...
+    open("input/test_image", O_RDONLY) = 3
+    fstat(3, {st_mode=S_IFREG|0664, st_size=144, ...}) = 0
+    mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f0667c8d000
+    read(3, "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"..., 4096) = 144
+    perf_event_open(0x7ffcbdac0410, 0, -1, -1, 0) = 4
+    ...
+
+    $ afl-fuzz -i input/ -o output/ -S fuzzer0 -- ./run_afl @@
