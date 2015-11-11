@@ -46,31 +46,32 @@ static void loop_setinfo(const char* file)
   ioctl(loop_fd, LOOP_SET_STATUS64, &linfo);
 }
 
+static const char* fstype;
 static void mount_it()
 {
-  mount(loop_device, mount_point, "vfat", 0x0, NULL);
+  mount(loop_device, mount_point, fstype, 0x0, NULL);
 }
 
-int main(int argc, char** argv)
+static int nr_fuzzer;
+void pre_hook(unsigned int argc, char**argv)
 {
-  int nr_fuzzer;
+  nr_fuzzer = atoi(argv[2]);
+  fstype = argv[1]
+  loop_setup(nr_fuzzer);
+}
 
-  if (argc < 3) {
+int run(unsigned int argc, char** argv)
+{
+  if (argc < 4) {
     fprintf(stderr, "Missing input file to mount.\n");
-    return 42;
+    return -1;
   }
-
-  afl_fork_server(NULL);
-
-  nr_fuzzer = atoi(argv[1]);
 
   unmount_it(nr_fuzzer);
 
-  loop_setup(nr_fuzzer);
   loop_detach();
-
-  loop_attach(argv[2]);
-  loop_setinfo(argv[2]);
+  loop_attach(argv[3]);
+  loop_setinfo(argv[3]);
 
   mount_it();
 

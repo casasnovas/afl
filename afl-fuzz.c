@@ -36,6 +36,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
+#include <setjmp.h>
 #include <time.h>
 #include <errno.h>
 #include <signal.h>
@@ -1196,6 +1197,27 @@ static void setup_shm(void) {
 
 }
 
+void* wrapper_dl_handle;
+void (*wrapper_run_callback)(unsigned int argc, char** argv);
+
+static void load_shared_object(char** argv)
+{
+  unsigned int argc;
+  void (*wrapper_pre_hook)(unsigned int argc, char** argv);
+	wrapper_dl_handle = dlopen(argv[0], RTLD_NOW);
+	if (!wrapper_dl_handle)
+		PFATAL("dlopen() failed");
+	wrapper_run_callback = dlsym(wrapper_dl_handle, "run");
+	if (!wrapper_run_callback)
+		PFATAL("dlsym() failed - you need to define the"
+		       " run(int agc, char **argv) callback");
+	wrapper_pre_hook = dlsym(wrapper_dl_handle, "pre_hook");
+	if (wrapper_pre_hook) {
+	  for (argc = 0; argv[argc]; ++argc);
+	  wrapper_pre_hook(argc, argv);
+	}
+}
+
 
 /* Load postprocessor, if available. */
 
@@ -2205,22 +2227,33 @@ void afl_waitchild(int* status)
   }
 }
 
-static void afl_clear_child_timer(void)
+static jmp_buf location_timeout;
+void afl_run_wrapper(char** argv)
 {
-  static struct itimerval it;
+	unsigned int argc = 0;
+	if (sigsetjmp(location_timeout, 1))
+		return;
 
-  setitimer(ITIMER_REAL, &it, NULL);
+	for (argc = 0; argv[argc]; ++argc)
+		;
+	wrapper_run_callback(argc, argv);
+}
+
+static void afl_clear_timer(void)
+{
+	static struct itimerval it;
+	setitimer(ITIMER_REAL, &it, NULL);
 }
 
 /* Configure timeout, as requested by user, then wait for child to terminate. */
-static void afl_set_child_timer(void)
+static void afl_set_timer(void)
 {
-  static struct itimerval it;
-  it.it_value.tv_sec = (exec_tmout / 1000);
-  it.it_value.tv_usec = (exec_tmout % 1000) * 1000;
+	static struct itimerval it;
+	it.it_value.tv_sec = (exec_tmout / 1000);
+	it.it_value.tv_usec = (exec_tmout % 1000) * 1000;
 
-  setitimer(ITIMER_REAL, &it, NULL);
-  /* The SIGALRM handler simply kills the child_pid and sets child_timed_out. */
+	setitimer(ITIMER_REAL, &it, NULL);
+	/* The SIGALRM handler simply kills the child_pid and sets child_timed_out. */
 }
 
 static void afl_sync_fs(void)
@@ -2233,27 +2266,11 @@ static void afl_sync_fs(void)
   }
 }
 
-static u8 afl_report_child_status(int status, u32 tb4)
+static u8 afl_report_child_status(void)
 {
   /* Report outcome to caller. */
 
   if (child_timed_out) return FAULT_HANG;
-
-  if (WIFSIGNALED(status) && !stop_soon) {
-    kill_signal = WTERMSIG(status);
-    return FAULT_CRASH;
-  }
-
-  /* A somewhat nasty hack for MSAN, which doesn't support abort_on_error and
-     must use a special exit code. */
-
-  if (uses_asan && WEXITSTATUS(status) == MSAN_ERROR) {
-    kill_signal = 0;
-    return FAULT_CRASH;
-  }
-
-  if ((dumb_mode == 1 || no_forkserver) && tb4 == EXEC_FAIL_SIG)
-    return FAULT_ERROR;
 
   return FAULT_NONE;
 }
@@ -2263,23 +2280,21 @@ static u8 afl_report_child_status(int status, u32 tb4)
 
 static u8 run_target(char** argv)
 {
-  int status = 0;
-
   child_timed_out = 0;
 
   afl_sync_fs();
+  
 
-  if (afl_fork(argv) == -1)
-    return 0;
+  afl_set_timer();
 
-  afl_set_child_timer();
-  afl_waitchild(&status);
-  afl_clear_child_timer();
+  afl_assoc_area();  // clears the shared mem.
+  afl_run_wrapper(argv);
+  afl_disassoc_area(); // don't pollute it with next actions.
 
-  child_pid = 0;
+  afl_clear_timer();
+
+
   total_execs++;
-
-  afl_disassoc_area();
 
   /* Any subsequent operations on trace_bits must not be moved by the
      compiler below this point. Past this location, trace_bits[] behave
@@ -2292,7 +2307,7 @@ static u8 run_target(char** argv)
   classify_counts((u32*)trace_bits);
 #endif /* ^__x86_64__ */
 
-  return afl_report_child_status(status, *(u32*)trace_bits);
+  return afl_report_child_status();
 }
 
 
@@ -2384,12 +2399,6 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
 
   stage_name = "calibration";
   stage_max  = no_var_check ? CAL_CYCLES_NO_VAR : CAL_CYCLES;
-
-  /* Make sure the forkserver is up before we do anything, and let's not
-     count its spin-up time toward binary calibration. */
-
-  if (dumb_mode != 1 && !no_forkserver && !forksrv_pid)
-    init_forkserver(argv);
 
   start_us = get_cur_time_us();
 
@@ -6460,21 +6469,10 @@ static void handle_skipreq(int sig) {
 }
 
 /* Handle timeout (SIGALRM). */
-
-static void handle_timeout(int sig) {
-
-  if (child_pid > 0) {
-
-    child_timed_out = 1; 
-    kill(child_pid, SIGKILL);
-
-  } else if (child_pid == -1 && forksrv_pid > 0) {
-
-    child_timed_out = 1; 
-    kill(forksrv_pid, SIGKILL);
-
-  }
-
+static void handle_timeout(int sig)
+{
+	child_timed_out = 1;
+	longjmp(location_timeout, 1);
 }
 
 
@@ -7571,6 +7569,8 @@ int main(int argc, char** argv) {
     use_argv = get_qemu_argv(argv[0], argv + optind, argc - optind);
   else
     use_argv = argv + optind;
+
+  load_shared_object(use_argv);
 
   perform_dry_run(use_argv);
 
