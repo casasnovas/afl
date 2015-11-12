@@ -1200,6 +1200,7 @@ static void setup_shm(void) {
 
 void* wrapper_dl_handle;
 void (*wrapper_run_callback)(unsigned int argc, char** argv);
+void (*wrapper_post_hook)(unsigned int argc, char** argv);
 
 static void load_shared_object(char** argv)
 {
@@ -1217,6 +1218,7 @@ static void load_shared_object(char** argv)
 	  for (argc = 0; argv[argc]; ++argc);
 	  wrapper_pre_hook(argc, argv);
 	}
+	wrapper_post_hook = dlsym(wrapper_dl_handle, "post_hook");
 }
 
 
@@ -2233,11 +2235,14 @@ void afl_run_wrapper(char** argv)
 {
 	unsigned int argc = 0;
 	if (sigsetjmp(location_timeout, 1))
-		return;
+		goto out;
 
 	for (argc = 0; argv[argc]; ++argc)
 		;
 	wrapper_run_callback(argc, argv);
+ out:
+	if (wrapper_post_hook)
+	  wrapper_post_hook(argc, argv);
 }
 
 static void afl_clear_timer(void)
@@ -2277,13 +2282,16 @@ static u8 afl_report_child_status(void)
   return FAULT_NONE;
 }
 
-/* Execute target application, monitoring for timeouts. Return status
-   information. The called program will update trace_bits[]. */
+static void handle_segfault(int sig)
+{
+	child_segfault = 1;
+	longjmp(location_timeout, 1);
+}
 
 static struct sigaction saved_fault_handler;
 static void afl_setup_fault_handler(void)
 {
-
+  struct sigaction sa;
   sa.sa_handler   = NULL;
   sa.sa_flags     = SA_RESTART;
   sa.sa_sigaction = NULL;
@@ -2298,6 +2306,9 @@ static void afl_restore_fault_handler(void)
   sigaction(SIGSEGV, &saved_fault_handler, NULL);
 }
 
+/* Execute target application, monitoring for timeouts. Return status
+   information. The called program will update trace_bits[]. */
+/* Handle timeout (SIGALRM). */
 static u8 run_target(char** argv)
 {
   child_timed_out = 0;
@@ -6497,12 +6508,6 @@ static void handle_timeout(int sig)
 	longjmp(location_timeout, 1);
 }
 
-/* Handle timeout (SIGALRM). */
-static void handle_segfault(int sig)
-{
-	child_segfault = 1;
-	longjmp(location_timeout, 1);
-}
 
 /* Do a PATH search and find target binary to see that it exists and
    isn't a shell script - a common and painful mistake. We also check for
