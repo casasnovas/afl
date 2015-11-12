@@ -2280,6 +2280,24 @@ static u8 afl_report_child_status(void)
 /* Execute target application, monitoring for timeouts. Return status
    information. The called program will update trace_bits[]. */
 
+static struct sigaction saved_fault_handler;
+static void afl_setup_fault_handler(void)
+{
+
+  sa.sa_handler   = NULL;
+  sa.sa_flags     = SA_RESTART;
+  sa.sa_sigaction = NULL;
+
+  sigemptyset(&sa.sa_mask);
+  sa.sa_handler = handle_segfault;
+  sigaction(SIGSEGV, &sa, &saved_fault_handler);
+}
+
+static void afl_restore_fault_handler(void)
+{
+  sigaction(SIGSEGV, &saved_fault_handler, NULL);
+}
+
 static u8 run_target(char** argv)
 {
   child_timed_out = 0;
@@ -2288,6 +2306,7 @@ static u8 run_target(char** argv)
   afl_sync_fs();
   
 
+  afl_setup_fault_handler();
   afl_set_timer();
 
   afl_assoc_area();  // clears the shared mem.
@@ -2295,7 +2314,7 @@ static u8 run_target(char** argv)
   afl_disassoc_area(); // don't pollute it with next actions.
 
   afl_clear_timer();
-
+  afl_restore_fault_handler();
 
   total_execs++;
 
@@ -7230,9 +7249,6 @@ static void setup_signal_handlers(void) {
 
   sa.sa_handler = handle_timeout;
   sigaction(SIGALRM, &sa, NULL);
-
-  sa.sa_handler = handle_segfault;
-  sigaction(SIGSEGV, &sa, NULL);
 
   /* Window resize */
 
