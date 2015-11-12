@@ -2231,57 +2231,6 @@ void afl_waitchild(int* status)
 }
 
 static jmp_buf location_timeout;
-void afl_run_wrapper(char** argv)
-{
-	unsigned int argc = 0;
-	if (sigsetjmp(location_timeout, 1))
-		goto out;
-
-	for (argc = 0; argv[argc]; ++argc)
-		;
-	wrapper_run_callback(argc, argv);
- out:
-	if (wrapper_post_hook)
-	  wrapper_post_hook(argc, argv);
-}
-
-static void afl_clear_timer(void)
-{
-	static struct itimerval it;
-	setitimer(ITIMER_REAL, &it, NULL);
-}
-
-/* Configure timeout, as requested by user, then wait for child to terminate. */
-static void afl_set_timer(void)
-{
-	static struct itimerval it;
-	it.it_value.tv_sec = (exec_tmout / 1000);
-	it.it_value.tv_usec = (exec_tmout % 1000) * 1000;
-
-	setitimer(ITIMER_REAL, &it, NULL);
-	/* The SIGALRM handler simply kills the child_pid and sets child_timed_out. */
-}
-
-static void afl_sync_fs(void)
-{
-  static int should_sync = 0;
-
-  if ((++should_sync % 4096) == 0) {
-    sync();
-    should_sync = 0;
-  }
-}
-
-static u8 afl_report_child_status(void)
-{
-  /* Report outcome to caller. */
-
-  if (child_timed_out) return FAULT_HANG;
-  if (child_segfault) return FAULT_CRASH;
-
-  return FAULT_NONE;
-}
-
 static void handle_segfault(int sig)
 {
 	child_segfault = 1;
@@ -2306,6 +2255,64 @@ static void afl_restore_fault_handler(void)
   sigaction(SIGSEGV, &saved_fault_handler, NULL);
 }
 
+/* Configure timeout, as requested by user, then wait for child to terminate. */
+static void afl_set_timer(void)
+{
+	static struct itimerval it;
+	it.it_value.tv_sec = (exec_tmout / 1000);
+	it.it_value.tv_usec = (exec_tmout % 1000) * 1000;
+
+	setitimer(ITIMER_REAL, &it, NULL);
+	/* The SIGALRM handler simply kills the child_pid and sets child_timed_out. */
+}
+
+static void afl_clear_timer(void)
+{
+	static struct itimerval it;
+	setitimer(ITIMER_REAL, &it, NULL);
+}
+
+void afl_run_wrapper(char** argv)
+{
+	unsigned int argc = 0;
+	if (sigsetjmp(location_timeout, 1))
+		goto out;
+
+	for (argc = 0; argv[argc]; ++argc)
+		;
+
+	afl_setup_fault_handler();
+	afl_set_timer();
+	wrapper_run_callback(argc, argv);
+	afl_clear_timer();
+	afl_restore_fault_handler();
+
+ out:
+	if (wrapper_post_hook)
+	  wrapper_post_hook(argc, argv);
+}
+
+static void afl_sync_fs(void)
+{
+  static int should_sync = 0;
+
+  if ((++should_sync % 4096) == 0) {
+    sync();
+    should_sync = 0;
+  }
+}
+
+static u8 afl_report_child_status(void)
+{
+  /* Report outcome to caller. */
+
+  if (child_timed_out) return FAULT_HANG;
+  if (child_segfault) return FAULT_CRASH;
+
+  return FAULT_NONE;
+}
+
+
 /* Execute target application, monitoring for timeouts. Return status
    information. The called program will update trace_bits[]. */
 /* Handle timeout (SIGALRM). */
@@ -2317,15 +2324,10 @@ static u8 run_target(char** argv)
   afl_sync_fs();
   
 
-  afl_setup_fault_handler();
-  afl_set_timer();
-
   afl_assoc_area();  // clears the shared mem.
   afl_run_wrapper(argv);
   afl_disassoc_area(); // don't pollute it with next actions.
 
-  afl_clear_timer();
-  afl_restore_fault_handler();
 
   total_execs++;
 
