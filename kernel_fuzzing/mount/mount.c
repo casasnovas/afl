@@ -53,7 +53,7 @@ static void mount_it()
 }
 
 static int nr_fuzzer;
-void pre_hook(unsigned int argc, char**argv)
+void load_hook(unsigned int argc, char**argv)
 {
   nr_fuzzer = atoi(argv[2]);
   fstype = argv[1];

@@ -9,7 +9,7 @@
 static int null_fd;
 static pid_t child;
 
-int pre_hook(unsigned int argc, char** argv)
+int load_hook(unsigned int argc, char** argv)
 {
   null_fd = open("/dev/null", O_RDWR);
 }

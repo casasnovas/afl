@@ -1199,25 +1199,27 @@ static void setup_shm(void) {
 }
 
 void* wrapper_dl_handle;
-void (*wrapper_run_callback)(unsigned int argc, char** argv);
+void (*wrapper_pre_hook)(unsigned int argc, char** argv);
+void (*wrapper_run_hook)(unsigned int argc, char** argv);
 void (*wrapper_post_hook)(unsigned int argc, char** argv);
 
 static void load_shared_object(char** argv)
 {
   unsigned int argc;
-  void (*wrapper_pre_hook)(unsigned int argc, char** argv);
+  void (*wrapper_load_hook)(unsigned int argc, char** argv);
 	wrapper_dl_handle = dlopen(argv[0], RTLD_NOW);
 	if (!wrapper_dl_handle)
 		PFATAL("dlopen() failed");
-	wrapper_run_callback = dlsym(wrapper_dl_handle, "run");
-	if (!wrapper_run_callback)
+	wrapper_run_hook = dlsym(wrapper_dl_handle, "run");
+	if (!wrapper_run_hook)
 		PFATAL("dlsym() failed - you need to define the"
 		       " run(int agc, char **argv) callback");
-	wrapper_pre_hook = dlsym(wrapper_dl_handle, "pre_hook");
-	if (wrapper_pre_hook) {
+	wrapper_load_hook = dlsym(wrapper_dl_handle, "load_hook");
+	if (wrapper_load_hook) {
 	  for (argc = 0; argv[argc]; ++argc);
-	  wrapper_pre_hook(argc, argv);
+	  wrapper_load_hook(argc, argv);
 	}
+	wrapper_pre_hook = dlsym(wrapper_dl_handle, "pre_hook");
 	wrapper_post_hook = dlsym(wrapper_dl_handle, "post_hook");
 }
 
@@ -2281,9 +2283,12 @@ void afl_run_wrapper(char** argv)
 	for (argc = 0; argv[argc]; ++argc)
 		;
 
+	if (wrapper_pre_hook)
+	  wrapper_pre_hook(argc, argv);
+
 	afl_setup_fault_handler();
 	afl_set_timer();
-	wrapper_run_callback(argc, argv);
+	wrapper_run_hook(argc, argv);
 	afl_clear_timer();
 	afl_restore_fault_handler();
 
