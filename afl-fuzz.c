@@ -127,7 +127,8 @@ static off_t mmap_offset;
 
 static volatile u8 stop_soon,         /* Ctrl-C pressed?                  */
                    clear_screen = 1,  /* Window resized?                  */
-                   child_timed_out;   /* Traced process timed out?        */
+		   child_timed_out,   /* Traced process timed out?        */
+		   child_segfault;    /* Did we segfault while executing the wrapper */
 
 static u32 queued_paths,              /* Total number of queued testcases */
            queued_variable,           /* Testcases with variable behavior */
@@ -2271,6 +2272,7 @@ static u8 afl_report_child_status(void)
   /* Report outcome to caller. */
 
   if (child_timed_out) return FAULT_HANG;
+  if (child_segfault) return FAULT_CRASH;
 
   return FAULT_NONE;
 }
@@ -2281,6 +2283,7 @@ static u8 afl_report_child_status(void)
 static u8 run_target(char** argv)
 {
   child_timed_out = 0;
+  child_segfault  = 0;
 
   afl_sync_fs();
   
@@ -6475,6 +6478,12 @@ static void handle_timeout(int sig)
 	longjmp(location_timeout, 1);
 }
 
+/* Handle timeout (SIGALRM). */
+static void handle_segfault(int sig)
+{
+	child_segfault = 1;
+	longjmp(location_timeout, 1);
+}
 
 /* Do a PATH search and find target binary to see that it exists and
    isn't a shell script - a common and painful mistake. We also check for
@@ -7221,6 +7230,9 @@ static void setup_signal_handlers(void) {
 
   sa.sa_handler = handle_timeout;
   sigaction(SIGALRM, &sa, NULL);
+
+  sa.sa_handler = handle_segfault;
+  sigaction(SIGSEGV, &sa, NULL);
 
   /* Window resize */
 
