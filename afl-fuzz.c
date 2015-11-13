@@ -6512,7 +6512,7 @@ static void handle_skipreq(int sig) {
 static void handle_timeout(int sig)
 {
 	child_timed_out = 1;
-	longjmp(location_timeout, 1);
+	/* longjmp(location_timeout, 1); */
 }
 
 
