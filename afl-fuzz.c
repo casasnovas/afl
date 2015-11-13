@@ -2286,12 +2286,7 @@ void afl_run_wrapper(char** argv)
 	if (wrapper_pre_hook)
 	  wrapper_pre_hook(argc, argv);
 
-	afl_setup_fault_handler();
-	afl_set_timer();
 	wrapper_run_hook(argc, argv);
-	afl_clear_timer();
-	afl_restore_fault_handler();
-
  out:
 	if (wrapper_post_hook)
 	  wrapper_post_hook(argc, argv);
@@ -2329,10 +2324,15 @@ static u8 run_target(char** argv)
   afl_sync_fs();
   
 
+  afl_setup_fault_handler();
+  afl_set_timer();
+
   afl_assoc_area();  // clears the shared mem.
   afl_run_wrapper(argv);
   afl_disassoc_area(); // don't pollute it with next actions.
 
+  afl_clear_timer();
+  afl_restore_fault_handler();
 
   total_execs++;
 
