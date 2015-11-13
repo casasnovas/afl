@@ -1,6 +1,7 @@
 #include <sys/mount.h>
 #include <sys/stat.h>
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -9,6 +10,8 @@
 #include <linux/loop.h>
 
 #include "forkserver.h"
+
+#include "btrfs.c"
 
 #define die(...) do { \
     fprintf(stderr, __VA_ARGS__);		\
@@ -68,6 +71,12 @@ static void mount_it()
     errno = 0;
     mount(loop_device, mount_point, fstype, MS_RDONLY, NULL);
   }
+	DIR *dir = opendir(mount_point);
+	if (dir) {
+		readdir(dir);
+		closedir(dir);
+	}
+
 }
 
 static int nr_fuzzer;
@@ -87,9 +96,13 @@ int run(unsigned int argc, char** argv)
 
   unmount_it(nr_fuzzer);
 
+	static char temp_filename[64];
+	sprintf(temp_filename, "%s.%u", argv[3], nr_fuzzer);
+	construct_image(argv[3], temp_filename);
+
   loop_detach();
-  loop_attach(argv[3]);
-  loop_setinfo(argv[3]);
+  loop_attach(temp_filename);
+  loop_setinfo(temp_filename);
 
   mount_it();
 

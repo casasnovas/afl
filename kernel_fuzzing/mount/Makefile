@@ -1,7 +1,7 @@
 
 PWD=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))/
 
-filesystems=vfat iso9660
+filesystems=vfat iso9660 btrfs
 inputs=$(addprefix inputs/,$(filesystems))
 
 all: mount.so $(inputs)
@@ -21,8 +21,13 @@ inputs/vfat:
 	dd if=/dev/zero of=$(PWD)/inputs/vfat bs=1024 count=34
 	mkfs.vfat $(PWD)/$@
 
+inputs/btrfs:
+	mkdir -p $(PWD)/inputs
+	# needs root to mount for the initial files
+	sudo python btrfs.py $@
+
 mount.so: mount.c
-	$(CC) -fpic -shared -I $(PWD)/../../ -I $(PWD)/../ $^ -o $@
+	$(CC) -std=gnu99 -fpic -shared -I $(PWD)/../../ -I $(PWD)/../ $^ -o $@
 
 define one_fs
 run_$(1): mount.so inputs/$(1)
