@@ -1208,8 +1208,10 @@ static void load_shared_object(char** argv)
   unsigned int argc;
   void (*wrapper_load_hook)(unsigned int argc, char** argv);
 	wrapper_dl_handle = dlopen(argv[0], RTLD_NOW);
-	if (!wrapper_dl_handle)
-		PFATAL("dlopen() failed");
+	if (!wrapper_dl_handle) {
+	  fprintf(stderr, "dlopen(): %s\n", dlerror());
+	  PFATAL("dlopen() error");
+	}
 	wrapper_run_hook = dlsym(wrapper_dl_handle, "run");
 	if (!wrapper_run_hook)
 		PFATAL("dlsym() failed - you need to define the"

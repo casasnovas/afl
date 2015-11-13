@@ -10,6 +10,11 @@
 
 #include "forkserver.h"
 
+#define die(...) do { \
+    fprintf(stderr, __VA_ARGS__);		\
+    abort();					\
+  } while (0)
+
 static char mount_point[16];
 static void unmount_it(int mount_nr)
 {
@@ -24,6 +29,8 @@ static void loop_setup(int loop_nr)
   snprintf(loop_device, sizeof(loop_device), "/dev/loop%d", loop_nr);
 
   loop_fd = open(loop_device, O_RDWR);
+  if (loop_fd < 0)
+    die("Could not open loop device %s [%s]\n", loop_device, strerror(errno));
 }
 
 static void loop_detach(void)
@@ -33,9 +40,16 @@ static void loop_detach(void)
 
 static void loop_attach(const char* file)
 {
+  unsigned int max_nr_retry = 42;
   int file_fd = open(file, O_RDWR);
-
-  ioctl(loop_fd, LOOP_SET_FD, file_fd);
+  if (file_fd < 0)
+    die("Could not open file to attach %s [%s]\n", file, strerror(errno));
+ retry:
+  if (ioctl(loop_fd, LOOP_SET_FD, file_fd)) {
+    if (errno == EBUSY && --max_nr_retry)
+      goto retry;
+    die("Could not configure loop device %s with %s [%s]\n", loop_device, file, strerror(errno));
+  }
   close(file_fd);
 }
 
