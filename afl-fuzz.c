@@ -2279,8 +2279,6 @@ static void afl_clear_timer(void)
 void afl_run_wrapper(char** argv)
 {
 	unsigned int argc = 0;
-	if (sigsetjmp(location_timeout, 1))
-		goto out;
 
 	for (argc = 0; argv[argc]; ++argc)
 		;
@@ -2289,9 +2287,11 @@ void afl_run_wrapper(char** argv)
 	  wrapper_pre_hook(argc, argv);
 
 	wrapper_run_hook(argc, argv);
- out:
-	if (wrapper_post_hook)
+
+	if (wrapper_post_hook) 
 	  wrapper_post_hook(argc, argv);
+	else
+	  PFATAL("no post hook.");
 }
 
 static void afl_sync_fs(void)

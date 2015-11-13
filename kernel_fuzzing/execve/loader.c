@@ -4,12 +4,12 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <signal.h>
-
+#include <stdio.h>
 #include "config.h"
 #include "forkserver.h"
 
 static int null_fd;
-static pid_t child;
+static pid_t child = -1;
 
 int load_hook(unsigned int argc, char** argv)
 {
@@ -32,8 +32,8 @@ void post_hook(unsigned int argc, char* argv)
 {
   sigprocmask(SIG_SETMASK, &old_set, NULL);
   if (child != -1) {
-    waitpid(child, NULL, WNOHANG);
     kill(child, SIGKILL);
+    waitpid(child, NULL, 0x0);
   }
 }
 
