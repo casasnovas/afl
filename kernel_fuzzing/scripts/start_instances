@@ -9,17 +9,27 @@ if [ -z "${nr_jobs}" ]; then
     nr_jobs=$(nproc)
 fi
 
-for i in `seq 0 4`; do
+for i in `seq 0 ${nr_jobs}`; do
     export wrapper${i}="$(afl_instance=${i} eval echo $(echo ${wrapper}))"
 done
 
 export AFL_SKIP_BIN_CHECK=1
 
-tmux_args="tmux new-session -d \"${AFL_FUZZ} -i ${input} -o ${output} -M fuzzer0 -- ${wrapper0}; sleep 5\" \\;"
+
+tmux_cmd_file=$(mktemp tmux_cmd.XXX)
+
+echo "new-session \"${AFL_FUZZ} -i ${input} -o ${output} -M fuzzer0 -- ${wrapper0}; sleep 5\" ; " > ${tmux_cmd_file}
 for i in $(seq $(( ${nr_jobs} - 1 ))); do
     wrapper_cmd="$(eval echo \${wrapper${i}})"
-    tmux_args="${tmux_args} split-window -d \"${AFL_FUZZ} -i ${input} -o ${output} -S fuzzer${i} -- ${wrapper_cmd}; sleep 5\" \\;"
+    if [ $((${i}  % 4)) -eq 0 ]; then
+	echo "select-layout tiled ;" >> ${tmux_cmd_file}
+	echo "new-window \"${AFL_FUZZ} -i ${input} -o ${output} -S fuzzer${i} -- ${wrapper_cmd}; sleep 5\" ;" >> ${tmux_cmd_file}
+    else
+	echo "  split-window \"${AFL_FUZZ} -i ${input} -o ${output} -S fuzzer${i} -- ${wrapper_cmd}; sleep 5\" ;" >> ${tmux_cmd_file}
+    fi
 done
-tmux_args="${tmux_args} attach \\; select-layout tiled \\;"
+echo "select-layout tiled ;" >> ${tmux_cmd_file}
 
-eval ${tmux_args}
+exec tmux new-session \; source-file ${tmux_cmd_file}
+
+
