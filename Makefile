@@ -24,7 +24,7 @@ MISC_PATH   = $(PREFIX)/share/afl
 
 PROGS       = afl-gcc afl-as afl-fuzz afl-showmap afl-tmin afl-gotcpu
 
-CFLAGS     ?= -O3 -funroll-loops
+CFLAGS     ?= -O3 -funroll-loops -ggdb
 CFLAGS     += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign \
 	      -DAFL_PATH=\"$(HELPER_PATH)\" -DDOC_PATH=\"$(DOC_PATH)\" \
 	      -DBIN_PATH=\"$(BIN_PATH)\" -DVERSION=\"$(VERSION)\"
