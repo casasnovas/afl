@@ -63,7 +63,11 @@ static void loop_setinfo(const char* file)
 static const char* fstype;
 static void mount_it()
 {
-  mount(loop_device, mount_point, fstype, 0x0, NULL);
+  if (mount(loop_device, mount_point, fstype, 0x0, NULL) == -1 &&
+      errno == EACCES) {
+    errno = 0;
+    mount(loop_device, mount_point, fstype, MS_RDONLY, NULL);
+  }
 }
 
 static int nr_fuzzer;
