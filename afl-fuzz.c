@@ -2290,8 +2290,6 @@ void afl_run_wrapper(char** argv)
 
 	if (wrapper_post_hook) 
 	  wrapper_post_hook(argc, argv);
-	else
-	  PFATAL("no post hook.");
 }
 
 static void afl_sync_fs(void)
