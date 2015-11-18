@@ -28,8 +28,6 @@ for i in $(seq $(( ${nr_jobs} - 1 ))); do
 	echo "  split-window \"${AFL_FUZZ} -i ${input} -o ${output} -S fuzzer${i} -- ${wrapper_cmd}; ${SHELL}\" ;" >> ${tmux_cmd_file}
     fi
 done
-echo "select-layout tiled ;" >> ${tmux_cmd_file}
+echo "select-layout tiled" >> ${tmux_cmd_file}
 
-exec tmux new-session \; source-file ${tmux_cmd_file}
-
-
+exec tmux start \; source ${tmux_cmd_file} \; attach
