@@ -1,0 +1,16 @@
+#! /bin/bash
+
+# environment afl_fuzz, instance, input, output, wrapper
+
+export AFL_SKIP_BIN_CHECK=1
+
+wrapper="$(echo ${wrapper} | tr ',' ' ')"
+
+mknod /dev/loop${instance} b 7 ${instance}
+mkdir -p /tmp/${instance}
+
+if [ ${instance} -eq 0 ]; then
+    ${afl_fuzz} -i ${input} -o ${output} -M fuzzer0 -- ${wrapper}
+else
+    ${afl_fuzz} -i ${input} -o ${output} -S fuzzer${instance} -- ${wrapper}
+fi

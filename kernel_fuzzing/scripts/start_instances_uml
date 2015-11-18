@@ -1,0 +1,33 @@
+#! /bin/bash
+
+input="$1"
+output="$2"
+wrapper="$3"
+nr_jobs="$4"
+
+if [ -z "${nr_jobs}" ]; then
+    nr_jobs=$(nproc)
+fi
+
+for i in `seq 0 ${nr_jobs}`; do
+    export wrapper${i}="$(afl_instance=${i} eval echo $(echo ${wrapper}) | tr -s ' ' ',')"
+done
+
+UML=/home/quentin/linux-2.6/vmlinux
+UML_ARGS="mem=128M rootfstype=hostfs rw init=$(realpath $(dirname $0))/start_one_uml_instance afl_fuzz=${AFL_FUZZ} input=${input} output=${output}"
+
+tmux_cmd_file=$(mktemp /tmp/tmux_cmd.XXX)
+
+echo "new-session \"${UML} ${UML_ARGS} instance=0 wrapper=${wrapper0} ; ${SHELL} \"" > ${tmux_cmd_file}
+for i in $(seq $(( ${nr_jobs} - 1 ))); do
+    wrapper_cmd="$(eval echo \${wrapper${i}})"
+    if [ $((${i}  % 4)) -eq 0 ]; then
+	echo "select-layout tiled ;" >> ${tmux_cmd_file}
+	echo "new-window \"${UML} ${UML_ARGS} instance=${i} wrapper=${wrapper_cmd} ; ${SHELL} \"" >> ${tmux_cmd_file}
+    else
+	echo "  split-window \"${UML} ${UML_ARGS} instance=${i} wrapper=${wrapper_cmd} ; ${SHELL} \"" >> ${tmux_cmd_file}
+    fi
+done
+echo "select-layout tiled" >> ${tmux_cmd_file}
+
+exec tmux start \; source ${tmux_cmd_file} \; attach

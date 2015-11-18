@@ -30,7 +30,7 @@ mount.so: mount.c
 
 define one_fs
 run_$(1): mount.so inputs_$(1)/fs
-	AFL_FUZZ=$$(PWD)/../../afl-fuzz ../scripts/start_instances $$(PWD)/inputs_$1/ $$(PWD)/outputs_$1 "$$(PWD)/mount.so $1 \$$$${afl_instance} @@"
+	AFL_FUZZ=$$(PWD)/../../afl-fuzz ../scripts/start_instances_uml $$(PWD)/inputs_$1/ $$(PWD)/outputs_$1 "$$(PWD)/mount.so $1 \$$$${afl_instance} @@"
 
 resume_$(1): mount.so inputs_$(1)/fs
 	AFL_FUZZ=$$(PWD)/../../afl-fuzz ../scripts/start_instances - $$(PWD)/outputs_$1 "$$(PWD)/mount.so $1 \$$$${afl_instance} @@"

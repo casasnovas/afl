@@ -21,7 +21,7 @@
 static char mount_point[16];
 static void unmount_it(int mount_nr)
 {
-  snprintf(mount_point, sizeof(mount_point), "/mnt/%d", mount_nr);
+  snprintf(mount_point, sizeof(mount_point), "/tmp/%d", mount_nr);
   umount(mount_point);
 }
 
