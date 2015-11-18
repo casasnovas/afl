@@ -26,7 +26,7 @@ inputs_btrfs/fs:
 	sudo python btrfs.py $@
 
 mount.so: mount.c
-	$(CC) -Wall -std=gnu99 -fpic -shared -I $(PWD)/../../ -I $(PWD)/../ $^ -o $@
+	$(CC) -std=gnu99 -fpic -shared -I $(PWD)/../../ -I $(PWD)/../ $^ -o $@
 
 define one_fs
 run_$(1): mount.so inputs_$(1)/fs
