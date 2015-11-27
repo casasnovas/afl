@@ -62,7 +62,6 @@
 
 # define AFL_CTL_ASSOC_AREA (42)
 # define AFL_CTL_DISASSOC_AREA (43)
-# define AFL_CTL_GET_MMAP_OFFSET (44)
 
 /* Lots of globals, but mostly for the status UI and other things where it
    really makes no sense to haul them around as function parameters. */
@@ -1190,9 +1189,7 @@ static void setup_shm(void) {
   close(fd_afl_area);
   fd_afl_area = DEVAFL_FD;
 
-  mmap_offset = ioctl(fd_afl_area, AFL_CTL_GET_MMAP_OFFSET, 0);
-
-  trace_bits = mmap(NULL, MAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd_afl_area, mmap_offset);
+  trace_bits = mmap(NULL, MAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd_afl_area, 0);
   
   if (trace_bits == MAP_FAILED) PFATAL("mmap() failed");
 
