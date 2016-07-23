@@ -4190,8 +4190,6 @@ static void show_stats(void) {
           DI(stage_finds[STAGE_HAVOC]), DI(stage_cycles[STAGE_HAVOC]),
           DI(stage_finds[STAGE_SPLICE]), DI(stage_cycles[STAGE_SPLICE]));
 
-  sprintf(tmp, "%s (%0.02f%%)", DI(t_bytes), t_byte_ratio);
-
   SAYF(bV bSTOP "       havoc : " cRST "%-37s " bSTG bV bSTOP, tmp);
 
   if (t_bytes) sprintf(tmp, "%0.02f%%", stab_ratio);
@@ -5012,7 +5010,7 @@ static u8 fuzz_one(char** argv) {
   /* Skip deterministic fuzzing if exec path checksum puts this out of scope
      for this master instance. */
 
-  if (master_max && (queue->exec_cksum % master_max) != master_id - 1)
+  if (master_max && (queue_cur->exec_cksum % master_max) != master_id - 1)
     goto havoc_stage;
 
   /*********************************************
