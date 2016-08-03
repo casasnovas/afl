@@ -35,7 +35,7 @@
 
      - It checks for calloc() overflows and can cause soft or hard failures
        of alloc requests past a configurable memory limit (AFL_LD_LIMIT_MB,
-       AFL_LD_HARD_LIMIT).
+       AFL_LD_HARD_FAIL).
 
    Basically, it is inspired by some of the non-default options available
    for the OpenBSD allocator - see malloc.conf(5) on that platform for
@@ -49,7 +49,7 @@
 
    The allocator is slow and memory-intensive (even the tiniest allocation
    uses up 4 kB of physical memory and 8 kB of virtual mem), making it
-   completely unsuitable for "production" uses; but it is faster and more
+   completely unsuitable for "production" uses; but it can be faster and more
    hassle-free than ASAN / MSAN when fuzzing small, self-contained binaries.
 
    To use this library, run AFL like so:
@@ -112,7 +112,7 @@
 
 static u32 max_mem = MAX_ALLOC;         /* Max heap usage to permit         */
 static u8  alloc_verbose,               /* Additional debug messages        */
-           hard_limit;                  /* abort() when max_mem exceeded?   */
+           hard_fail;                   /* abort() when max_mem exceeded?   */
 
 static __thread u64 total_mem;          /* Currently allocated mem          */
 
@@ -127,7 +127,7 @@ static void* __dislocator_alloc(size_t len) {
 
   if (total_mem + len > max_mem) {
 
-    if (hard_limit)
+    if (hard_fail)
       FATAL("total allocs exceed %u MB", max_mem / 1024 / 1024);
 
     DEBUGF("total allocs exceed %u MB, returning NULL",
@@ -145,7 +145,10 @@ static void* __dislocator_alloc(size_t len) {
 
   if (ret == (void*)-1) {
 
-    DEBUGF("mmap() failed when allocating memory (OOM?)");
+    if (hard_fail) FATAL("mmap() failed on alloc (OOM?)");
+
+    DEBUGF("mmap() failed on alloc (OOM?)");
+
     return NULL;
 
   }
@@ -285,6 +288,6 @@ __attribute__((constructor)) void __dislocator_init(void) {
   }
 
   alloc_verbose = !!getenv("AFL_LD_VERBOSE");
-  hard_limit = !!getenv("AFL_LD_HARD_LIMIT");
+  hard_fail = !!getenv("AFL_LD_HARD_FAIL");
 
 }
