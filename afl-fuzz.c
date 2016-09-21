@@ -139,6 +139,7 @@ static u8  var_bytes[MAP_SIZE];       /* Bytes that appear to be variable */
 
 static s32 shm_id;                    /* ID of the SHM region             */
 
+
 static volatile u8 stop_soon,         /* Ctrl-C pressed?                  */
                    clear_screen = 1,  /* Window resized?                  */
                    child_timed_out;   /* Traced process timed out?        */
@@ -1333,14 +1334,9 @@ static void cull_queue(void) {
 
 /* Configure shared memory and virgin_bits. This is called at startup. */
 
-EXP_ST void setup_shm(void) {
+EXP_ST void setup_shm_userspace(void) {
 
   u8* shm_str;
-
-  if (!in_bitmap) memset(virgin_bits, 255, MAP_SIZE);
-
-  memset(virgin_hang, 255, MAP_SIZE);
-  memset(virgin_crash, 255, MAP_SIZE);
 
   shm_id = shmget(IPC_PRIVATE, MAP_SIZE, IPC_CREAT | IPC_EXCL | 0600);
 
@@ -1365,6 +1361,34 @@ EXP_ST void setup_shm(void) {
 
 }
 
+
+EXP_ST void setup_shm(void) {
+
+  if (!in_bitmap) memset(virgin_bits, 255, MAP_SIZE);
+
+  memset(virgin_hang, 255, MAP_SIZE);
+  memset(virgin_crash, 255, MAP_SIZE);
+
+  return setup_shm_userspace();
+}
+
+
+static void afl_manual_fork(char** argv);
+static void afl_forkserver_fork(void);
+static void afl_waitchild(int* status);
+static void afl_set_timer(void);
+static void afl_clear_timer(void);
+
+static void afl_run_now(char** argv) {
+  child_timed_out = 0;
+
+  if (dumb_mode == 1 || no_forkserver) {
+    afl_manual_fork(argv);
+  } else {
+    afl_forkserver_fork();
+  }
+
+}
 
 /* Load postprocessor, if available. */
 
@@ -1969,7 +1993,6 @@ static void destroy_extras(void) {
 
 EXP_ST void init_forkserver(char** argv) {
 
-  static struct itimerval it;
   int st_pipe[2], ctl_pipe[2];
   int status;
   s32 rlen;
@@ -2097,19 +2120,11 @@ EXP_ST void init_forkserver(char** argv) {
   fsrv_ctl_fd = ctl_pipe[1];
   fsrv_st_fd  = st_pipe[0];
 
-  /* Wait for the fork server to come up, but don't wait too long. */
-
-  it.it_value.tv_sec = ((exec_tmout * FORK_WAIT_MULT) / 1000);
-  it.it_value.tv_usec = ((exec_tmout * FORK_WAIT_MULT) % 1000) * 1000;
-
-  setitimer(ITIMER_REAL, &it, NULL);
+  afl_set_timer();
 
   rlen = read(fsrv_st_fd, &status, 4);
 
-  it.it_value.tv_sec = 0;
-  it.it_value.tv_usec = 0;
-
-  setitimer(ITIMER_REAL, &it, NULL);
+  afl_clear_timer();
 
   /* If we have a four-byte "hello" message from the server, we're all set.
      Otherwise, try to figure out what went wrong. */
@@ -2248,18 +2263,7 @@ EXP_ST void init_forkserver(char** argv) {
 
 }
 
-
-/* Execute target application, monitoring for timeouts. Return status
-   information. The called program will update trace_bits[]. */
-
-static u8 run_target(char** argv) {
-
-  static struct itimerval it;
-  static u32 prev_timed_out = 0;
-
-  int status = 0;
-  u32 tb4;
-
+static void afl_clear_trace() {
   child_timed_out = 0;
 
   /* After this memset, trace_bits[] are effectively volatile, so we
@@ -2268,7 +2272,9 @@ static u8 run_target(char** argv) {
 
   memset(trace_bits, 0, MAP_SIZE);
   MEM_BARRIER();
+}
 
+static void afl_manual_fork(char** argv) {
   /* If we're running in "dumb" mode, we can't rely on the fork server
      logic compiled into the target program, so we will just keep calling
      execve(). There is a bit of code duplication between here and 
@@ -2350,52 +2356,59 @@ static u8 run_target(char** argv) {
       exit(0);
 
     }
+  }
+}
 
-  } else {
-
-    s32 res;
+static void afl_forkserver_fork(void) {
+  s32 res;
 
     /* In non-dumb mode, we have the fork server up and running, so simply
        tell it to have at it, and then read back PID. */
 
-    if ((res = write(fsrv_ctl_fd, &prev_timed_out, 4)) != 4) {
+    if ((res = write(fsrv_ctl_fd, (const void*) &child_timed_out, 4)) != 4) {
 
-      if (stop_soon) return 0;
+      if (stop_soon) return;
       RPFATAL(res, "Unable to request new process from fork server (OOM?)");
 
     }
 
     if ((res = read(fsrv_st_fd, &child_pid, 4)) != 4) {
 
-      if (stop_soon) return 0;
+      if (stop_soon) return;
       RPFATAL(res, "Unable to request new process from fork server (OOM?)");
 
     }
 
     if (child_pid <= 0) FATAL("Fork server is misbehaving (OOM?)");
 
-  }
+}
 
+static void afl_set_timer(void)
+{
+  static struct itimerval it;
   /* Configure timeout, as requested by user, then wait for child to terminate. */
 
   it.it_value.tv_sec = (exec_tmout / 1000);
   it.it_value.tv_usec = (exec_tmout % 1000) * 1000;
 
   setitimer(ITIMER_REAL, &it, NULL);
+}
 
+static void afl_waitchild(int* status)
+{
   /* The SIGALRM handler simply kills the child_pid and sets child_timed_out. */
 
   if (dumb_mode == 1 || no_forkserver) {
 
-    if (waitpid(child_pid, &status, 0) <= 0) PFATAL("waitpid() failed");
+    if (waitpid(child_pid, status, 0) <= 0) PFATAL("waitpid() failed");
 
   } else {
 
     s32 res;
 
-    if ((res = read(fsrv_st_fd, &status, 4)) != 4) {
+    if ((res = read(fsrv_st_fd, status, 4)) != 4) {
 
-      if (stop_soon) return 0;
+      if (stop_soon) return;
       RPFATAL(res, "Unable to communicate with fork server (OOM?)");
 
     }
@@ -2404,10 +2417,30 @@ static u8 run_target(char** argv) {
 
   if (!WIFSTOPPED(status)) child_pid = 0;
 
-  it.it_value.tv_sec = 0;
-  it.it_value.tv_usec = 0;
+}
 
+static void afl_clear_timer(void) {
+  static struct itimerval it;
   setitimer(ITIMER_REAL, &it, NULL);
+}
+
+
+static u8 afl_report_child_status(int status, u32 tb4);
+
+/* Execute target application, monitoring for timeouts. Return status
+   information. The called program will update trace_bits[]. */
+/* Handle timeout (SIGALRM). */
+static u8 run_target(char** argv)
+{
+  u32 tb4;
+  int status = 0;
+
+  afl_clear_trace();
+
+  afl_set_timer();
+    afl_run_now(argv);
+    afl_waitchild(&status);
+  afl_clear_timer();
 
   total_execs++;
 
@@ -2425,8 +2458,11 @@ static u8 run_target(char** argv) {
   classify_counts((u32*)trace_bits);
 #endif /* ^__x86_64__ */
 
-  prev_timed_out = child_timed_out;
+  return afl_report_child_status(status, tb4);
+}
 
+static u8 afl_report_child_status(int status, u32 tb4)
+{
   /* Report outcome to caller. */
 
   if (child_timed_out) return FAULT_HANG;
