@@ -53,8 +53,10 @@
 #include <sys/types.h>
 #include <sys/resource.h>
 #include <sys/mman.h>
+#include <linux/ioctl.h>
 #include <sys/ioctl.h>
 #include <sys/file.h>
+
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined (__OpenBSD__)
 #  include <sys/sysctl.h>
@@ -136,8 +138,20 @@ EXP_ST u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
            virgin_crash[MAP_SIZE];    /* Bits we haven't seen in crashes  */
 
 static u8  var_bytes[MAP_SIZE];       /* Bytes that appear to be variable */
-
 static s32 shm_id;                    /* ID of the SHM region             */
+static int fd_kernel_device;          /* FD of the kernel coverage device */
+static int kernel_mode;               /* Are we fuzzing the kernel?       */
+
+#define KERNEL_MODE_AFL  1
+#define KERNEL_MODE_KCOV 2
+
+/* Values stolen from the kernel headers files */
+#define AFL_CTL_ASSOC_AREA 42
+#define AFL_CTL_DISASSOC_AREA 43
+
+#define KCOV_INIT_TABLE     _IOR('c', 2, unsigned long)
+#define KCOV_ENABLE         _IO('c', 100)
+#define KCOV_DISABLE        _IO('c', 100)
 
 
 static volatile u8 stop_soon,         /* Ctrl-C pressed?                  */
@@ -1195,7 +1209,7 @@ static inline void classify_counts(u32* mem) {
 
 static void remove_shm(void) {
 
-  shmctl(shm_id, IPC_RMID, NULL);
+  if (!kernel_mode) shmctl(shm_id, IPC_RMID, NULL);
 
 }
 
@@ -1361,6 +1375,21 @@ EXP_ST void setup_shm_userspace(void) {
 
 }
 
+EXP_ST void setup_shm_kernel(void) {
+
+  const char* device = kernel_mode == KERNEL_MODE_AFL ? "/dev/afl" : "/sys/kernel/debug/kcov";
+
+  fd_kernel_device = open(device, O_RDWR);
+  if (fd_kernel_device < 0) PFATAL("open(%s): %s", device, strerror(errno));
+
+  if (kernel_mode == KERNEL_MODE_KCOV &&
+      ioctl(fd_kernel_device, KCOV_INIT_TABLE, MAP_SIZE) != 0)
+      PFATAL("ioctl(KCOV_INIT_TABLE): %s", strerror(errno));
+
+  trace_bits = mmap(NULL, MAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd_kernel_device, 0);
+	  if (trace_bits == MAP_FAILED) PFATAL("mmap(%s): %s", device, strerror(errno));
+
+}
 
 EXP_ST void setup_shm(void) {
 
@@ -1369,9 +1398,78 @@ EXP_ST void setup_shm(void) {
   memset(virgin_hang, 255, MAP_SIZE);
   memset(virgin_crash, 255, MAP_SIZE);
 
-  return setup_shm_userspace();
+  if (kernel_mode)
+    setup_shm_kernel();
+  else
+    setup_shm_userspace();
 }
 
+void* wrapper_dl_handle;
+void (*wrapper_pre_hook)(unsigned int argc, char** argv);
+void (*wrapper_run_hook)(unsigned int argc, char** argv);
+void (*wrapper_post_hook)(unsigned int argc, char** argv);
+
+static void load_shared_object(char** argv)
+{
+  void (*wrapper_load_hook)(unsigned int argc, char** argv);
+
+  wrapper_dl_handle = dlopen(argv[0], RTLD_NOW);
+  if (!wrapper_dl_handle) PFATAL("dlopen() error: %s", dlerror());
+
+  wrapper_run_hook = dlsym(wrapper_dl_handle, "run");
+  if (!wrapper_run_hook) PFATAL("dlsym() failed - you need to define the"
+				" run(int agc, char **argv) callback");
+
+  wrapper_load_hook = dlsym(wrapper_dl_handle, "load_hook");
+  if (wrapper_load_hook) {
+    unsigned argc;
+    for (argc = 0; argv[argc]; ++argc)
+      ;
+    wrapper_load_hook(argc, argv);
+  }
+
+  wrapper_pre_hook = dlsym(wrapper_dl_handle, "pre_hook");
+  wrapper_post_hook = dlsym(wrapper_dl_handle, "post_hook");
+}
+
+static void afl_start_tracing(void) {
+
+  if (kernel_mode == KERNEL_MODE_AFL)
+    ioctl(fd_kernel_device, AFL_CTL_ASSOC_AREA);
+  else if (kernel_mode == KERNEL_MODE_KCOV)
+    ioctl(fd_kernel_device, KCOV_ENABLE, 0);
+
+}
+
+static void afl_stop_tracing(void) {
+
+  if (kernel_mode == KERNEL_MODE_AFL)
+    ioctl(fd_kernel_device, AFL_CTL_DISASSOC_AREA);
+  else if (kernel_mode == KERNEL_MODE_KCOV)
+    ioctl(fd_kernel_device, KCOV_DISABLE, 0);
+
+}
+
+void afl_run_wrapper(char** argv) {
+	unsigned int argc = 0;
+
+	for (argc = 0; argv[argc]; ++argc)
+		;
+
+	if (wrapper_pre_hook)
+	  wrapper_pre_hook(argc, argv);
+
+	afl_start_tracing();
+	  wrapper_run_hook(argc, argv);
+	afl_stop_tracing();
+
+	if (wrapper_post_hook)
+	  wrapper_post_hook(argc, argv);
+}
+
+static int file_exists(const char* path) {
+  return access(path, F_OK) == 0;
+}
 
 static void afl_manual_fork(char** argv);
 static void afl_forkserver_fork(void);
@@ -1382,7 +1480,9 @@ static void afl_clear_timer(void);
 static void afl_run_now(char** argv) {
   child_timed_out = 0;
 
-  if (dumb_mode == 1 || no_forkserver) {
+  if (kernel_mode)
+    afl_run_wrapper(argv);
+  else if (dumb_mode == 1 || no_forkserver) {
     afl_manual_fork(argv);
   } else {
     afl_forkserver_fork();
@@ -2266,6 +2366,9 @@ EXP_ST void init_forkserver(char** argv) {
 static void afl_clear_trace() {
   child_timed_out = 0;
 
+  if (kernel_mode == KERNEL_MODE_AFL)
+    return;  /* The trace is cleared on assoc with /dev/afl */
+
   /* After this memset, trace_bits[] are effectively volatile, so we
      must prevent any earlier operations from venturing into that
      territory. */
@@ -2396,6 +2499,8 @@ static void afl_set_timer(void)
 
 static void afl_waitchild(int* status)
 {
+  if (kernel_mode) return;
+
   /* The SIGALRM handler simply kills the child_pid and sets child_timed_out. */
 
   if (dumb_mode == 1 || no_forkserver) {
@@ -2480,11 +2585,10 @@ static u8 afl_report_child_status(int status, u32 tb4)
     return FAULT_CRASH;
   }
 
-  if ((dumb_mode == 1 || no_forkserver) && tb4 == EXEC_FAIL_SIG)
+  if ((dumb_mode == 1 || no_forkserver) && !kernel_mode && tb4 == EXEC_FAIL_SIG)
     return FAULT_ERROR;
 
   return FAULT_NONE;
-
 }
 
 
@@ -2584,7 +2688,7 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
   /* Make sure the forkserver is up before we do anything, and let's not
      count its spin-up time toward binary calibration. */
 
-  if (dumb_mode != 1 && !no_forkserver && !forksrv_pid)
+  if (!kernel_mode && dumb_mode != 1 && !no_forkserver && !forksrv_pid)
     init_forkserver(argv);
 
   if (q->exec_cksum) memcpy(first_trace, trace_bits, MAP_SIZE);
@@ -6739,21 +6843,20 @@ static void handle_skipreq(int sig) {
 }
 
 /* Handle timeout (SIGALRM). */
-
 static void handle_timeout(int sig) {
+  child_timed_out = 1;
+
+  if (kernel_mode) return;
 
   if (child_pid > 0) {
 
-    child_timed_out = 1; 
     kill(child_pid, SIGKILL);
 
   } else if (child_pid == -1 && forksrv_pid > 0) {
 
-    child_timed_out = 1; 
     kill(forksrv_pid, SIGKILL);
 
   }
-
 }
 
 
@@ -6860,7 +6963,7 @@ EXP_ST void check_binary(u8* fname) {
 
 #endif /* ^!__APPLE__ */
 
-  if (!qemu_mode && !dumb_mode &&
+  if (!qemu_mode && !dumb_mode && !kernel_mode &&
       !memmem(f_data, f_len, SHM_ENV_VAR, strlen(SHM_ENV_VAR) + 1)) {
 
     SAYF("\n" cLRD "[-] " cRST
@@ -7009,6 +7112,7 @@ static void usage(u8* argv0) {
 
        "Execution control settings:\n\n"
 
+       "  -k            - Fuzz the host kernel\n"
        "  -f file       - location read by the fuzzed program (stdin)\n"
        "  -t msec       - timeout for each run (auto-scaled, 50-%u ms)\n"
        "  -m megs       - memory limit for child process (%u MB)\n"
@@ -7673,7 +7777,7 @@ int main(int argc, char** argv) {
   gettimeofday(&tv, &tz);
   srandom(tv.tv_sec ^ tv.tv_usec ^ getpid());
 
-  while ((opt = getopt(argc, argv, "+i:o:f:m:t:T:dnCB:S:M:x:Q")) > 0)
+  while ((opt = getopt(argc, argv, "+i:o:f:km:t:T:dnCB:S:M:x:Q")) > 0)
 
     switch (opt) {
 
@@ -7714,6 +7818,28 @@ int main(int argc, char** argv) {
         }
 
         break;
+
+      case 'k':
+
+	if (kernel_mode)
+	  break;
+
+	ACTF("Looking for coverage driver (kernel fuzzing mode)...");
+
+	if (file_exists("/dev/afl")) {
+	  kernel_mode = KERNEL_MODE_AFL;
+	  OKF("Using /dev/afl as coverage driver.");
+	}
+	else if (file_exists("/sys/kernel/debug/kcov")) {
+	  kernel_mode = KERNEL_MODE_KCOV;
+	  OKF("Using /sys/kernel/debug/kcov as coverage driver.");
+	}
+	else
+	  FATAL("Neither /dev/afl nor /sys/kernel/debug/kcov found on the running kernel:\n"
+		" - Use a recent kernel (>= v4.9) with CONFIG_KCOV=y or\n"
+		" - Merge the branch 'afl' in your kernel sources\n"
+		"     https://github.com/casasnovas/linux.git");
+	break;
 
       case 'S': 
 
@@ -7920,6 +8046,9 @@ int main(int argc, char** argv) {
     use_argv = get_qemu_argv(argv[0], argv + optind, argc - optind);
   else
     use_argv = argv + optind;
+
+  if (kernel_mode)
+    load_shared_object(use_argv);
 
   perform_dry_run(use_argv);
 
